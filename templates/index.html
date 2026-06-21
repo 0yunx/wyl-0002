@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT 设备心跳监控网关</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e7;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            color: #60a5fa;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #94a3b8;
+            font-size: 0.95rem;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .status-dot.online {
+            background: #22c55e;
+            box-shadow: 0 0 10px #22c55e;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.offline {
+            background: #ef4444;
+            box-shadow: 0 0 10px #ef4444;
+        }
+
+        .status-dot.warning {
+            background: #f59e0b;
+            box-shadow: 0 0 10px #f59e0b;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 25px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 1200px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .devices-section h2,
+        .alerts-section h2 {
+            font-size: 1.3rem;
+            margin-bottom: 15px;
+            color: #93c5fd;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .devices-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 15px;
+        }
+
+        .device-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 18px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .device-card.online {
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+
+        .device-card.offline {
+            border-color: rgba(239, 68, 68, 0.5);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .device-card.warning {
+            border-color: rgba(245, 158, 11, 0.5);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .device-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .device-name {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .device-status {
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .device-status.online {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+
+        .device-status.offline {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .device-status.warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }
+
+        .device-data {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .data-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .data-label {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .data-value {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .data-value.temp {
+            color: #f87171;
+        }
+
+        .data-value.humidity {
+            color: #60a5fa;
+        }
+
+        .data-value.warning {
+            color: #ef4444;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .device-time {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-align: center;
+            margin-bottom: 12px;
+        }
+
+        .device-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-success {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: rgba(34, 197, 94, 0.3);
+        }
+
+        .btn-warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            background: rgba(245, 158, 11, 0.3);
+        }
+
+        .alerts-section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            height: fit-content;
+            max-height: calc(100vh - 200px);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .alerts-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .alerts-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .alerts-list::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+
+        .alerts-list::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .alert-item {
+            padding: 12px 15px;
+            border-radius: 8px;
+            border-left: 4px solid;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .alert-item.offline {
+            background: rgba(239, 68, 68, 0.1);
+            border-left-color: #ef4444;
+        }
+
+        .alert-item.temperature {
+            background: rgba(245, 158, 11, 0.1);
+            border-left-color: #f59e0b;
+        }
+
+        .alert-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .alert-type {
+            font-size: 0.7rem;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .alert-type.offline {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        .alert-type.temperature {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }
+
+        .alert-time {
+            font-size: 0.7rem;
+            color: #64748b;
+        }
+
+        .alert-message {
+            font-size: 0.85rem;
+            color: #e4e4e7;
+            line-height: 1.4;
+        }
+
+        .no-alerts {
+            text-align: center;
+            color: #64748b;
+            padding: 40px 20px;
+            font-size: 0.9rem;
+        }
+
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            padding: 5px 12px;
+            border-radius: 15px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .connection-status.connected .status-dot {
+            background: #22c55e;
+            box-shadow: 0 0 8px #22c55e;
+        }
+
+        .connection-status.disconnected .status-dot {
+            background: #ef4444;
+            box-shadow: 0 0 8px #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🌡️ IoT 设备心跳监控网关</h1>
+        <p>
+            实时监控 10 台温湿度传感器 | 温度阈值: <span id="temp-threshold">35</span>°C | 心跳超时: <span id="hb-timeout">30</span>秒
+            <span id="connection-status" class="connection-status disconnected">
+                <span class="status-dot"></span>
+                <span id="connection-text">SSE 未连接</span>
+            </span>
+        </p>
+    </div>
+
+    <div class="status-bar">
+        <div class="status-item">
+            <span class="status-dot online"></span>
+            <span>在线设备: <strong id="online-count">0</strong></span>
+        </div>
+        <div class="status-item">
+            <span class="status-dot offline"></span>
+            <span>离线设备: <strong id="offline-count">0</strong></span>
+        </div>
+        <div class="status-item">
+            <span class="status-dot warning"></span>
+            <span>告警设备: <strong id="warning-count">0</strong></span>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="devices-section">
+            <h2>📦 设备列表</h2>
+            <div class="devices-grid" id="devices-grid"></div>
+        </div>
+
+        <div class="alerts-section">
+            <h2>🚨 最近告警</h2>
+            <div class="alerts-list" id="alerts-list">
+                <div class="no-alerts">暂无告警记录</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let devices = [];
+        let alerts = [];
+        let config = { temperature_threshold: 35, heartbeat_timeout: 30 };
+        let eventSource = null;
+
+        function formatTime(isoString) {
+            if (!isoString) return '暂无数据';
+            const date = new Date(isoString);
+            return date.toLocaleString('zh-CN', {
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function getDeviceStatusClass(device) {
+            if (device.status === 'offline') return 'offline';
+            if (device.temperature !== null && device.temperature > config.temperature_threshold) return 'warning';
+            return 'online';
+        }
+
+        function renderDevices() {
+            const grid = document.getElementById('devices-grid');
+            grid.innerHTML = '';
+
+            let onlineCount = 0;
+            let offlineCount = 0;
+            let warningCount = 0;
+
+            devices.forEach(device => {
+                const statusClass = getDeviceStatusClass(device);
+
+                if (device.status === 'offline') offlineCount++;
+                else if (statusClass === 'warning') warningCount++;
+                else onlineCount++;
+
+                const isTempWarning = device.temperature !== null && device.temperature > config.temperature_threshold;
+
+                const card = document.createElement('div');
+                card.className = `device-card ${statusClass}`;
+                card.id = `card-${device.id}`;
+
+                card.innerHTML = `
+                    <div class="device-header">
+                        <span class="device-name">${device.name}</span>
+                        <span class="device-status ${statusClass}">${device.status === 'offline' ? '离线' : (isTempWarning ? '告警' : '在线')}</span>
+                    </div>
+                    <div class="device-data">
+                        <div class="data-item">
+                            <div class="data-label">温度</div>
+                            <div class="data-value temp ${isTempWarning ? 'warning' : ''}">${device.temperature !== null ? device.temperature.toFixed(1) + '°C' : '--'}</div>
+                        </div>
+                        <div class="data-item">
+                            <div class="data-label">湿度</div>
+                            <div class="data-value humidity">${device.humidity !== null ? device.humidity.toFixed(1) + '%' : '--'}</div>
+                        </div>
+                    </div>
+                    <div class="device-time">
+                        最后心跳: ${formatTime(device.last_heartbeat)}
+                    </div>
+                    <div class="device-controls">
+                        <button class="btn ${device.simulator_enabled ? 'btn-danger' : 'btn-success'}" 
+                                onclick="toggleSensor('${device.id}', ${device.simulator_enabled})"
+                                ${device.status === 'offline' && !device.simulator_enabled ? '' : ''}>
+                            ${device.simulator_enabled ? '断开' : '恢复'}
+                        </button>
+                        <button class="btn ${device.temp_boost ? 'btn-warning' : 'btn-warning'}" 
+                                onclick="toggleTempBoost('${device.id}', ${device.temp_boost})">
+                            ${device.temp_boost ? '降' : '升'}温
+                        </button>
+                    </div>
+                `;
+
+                grid.appendChild(card);
+            });
+
+            document.getElementById('online-count').textContent = onlineCount;
+            document.getElementById('offline-count').textContent = offlineCount;
+            document.getElementById('warning-count').textContent = warningCount;
+        }
+
+        function renderAlerts() {
+            const list = document.getElementById('alerts-list');
+
+            if (alerts.length === 0) {
+                list.innerHTML = '<div class="no-alerts">暂无告警记录</div>';
+                return;
+            }
+
+            list.innerHTML = '';
+            alerts.slice(0, 20).forEach(alert => {
+                const item = document.createElement('div');
+                item.className = `alert-item ${alert.alert_type}`;
+                item.innerHTML = `
+                    <div class="alert-header">
+                        <span class="alert-type ${alert.alert_type}">${alert.alert_type === 'offline' ? '离线' : '温度'}</span>
+                        <span class="alert-time">${formatTime(alert.timestamp)}</span>
+                    </div>
+                    <div class="alert-message">${alert.message}</div>
+                `;
+                list.appendChild(item);
+            });
+        }
+
+        async function fetchDevices() {
+            try {
+                const response = await fetch(`${API_BASE}/api/devices`);
+                devices = await response.json();
+                renderDevices();
+            } catch (error) {
+                console.error('获取设备列表失败:', error);
+            }
+        }
+
+        async function fetchAlerts() {
+            try {
+                const response = await fetch(`${API_BASE}/api/alerts`);
+                alerts = await response.json();
+                renderAlerts();
+            } catch (error) {
+                console.error('获取告警列表失败:', error);
+            }
+        }
+
+        async function fetchConfig() {
+            try {
+                const response = await fetch(`${API_BASE}/api/config`);
+                config = await response.json();
+                document.getElementById('temp-threshold').textContent = config.temperature_threshold;
+                document.getElementById('hb-timeout').textContent = config.heartbeat_timeout;
+            } catch (error) {
+                console.error('获取配置失败:', error);
+            }
+        }
+
+        async function toggleSensor(deviceId, currentEnabled) {
+            const endpoint = currentEnabled ? 'disable' : 'enable';
+            try {
+                const response = await fetch(`${API_BASE}/api/sensor/${deviceId}/${endpoint}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                if (result.success) {
+                    await fetchDevices();
+                }
+            } catch (error) {
+                console.error('操作失败:', error);
+            }
+        }
+
+        async function toggleTempBoost(deviceId, currentBoost) {
+            try {
+                const response = await fetch(`${API_BASE}/api/sensor/${deviceId}/boost`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ boost: !currentBoost })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    await fetchDevices();
+                }
+            } catch (error) {
+                console.error('操作失败:', error);
+            }
+        }
+
+        function connectSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            eventSource = new EventSource(`${API_BASE}/events`);
+
+            eventSource.onopen = () => {
+                updateConnectionStatus(true);
+                console.log('SSE 连接已建立');
+            };
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'alert') {
+                        alerts.unshift(data.data);
+                        if (alerts.length > 50) alerts.pop();
+                        renderAlerts();
+                        fetchDevices();
+                    } else if (data.type === 'connected') {
+                        console.log(data.message);
+                    }
+                } catch (error) {
+                    console.error('解析 SSE 消息失败:', error);
+                }
+            };
+
+            eventSource.onerror = () => {
+                updateConnectionStatus(false);
+                console.log('SSE 连接断开，3秒后重试...');
+                setTimeout(connectSSE, 3000);
+            };
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connection-status');
+            const textEl = document.getElementById('connection-text');
+            if (connected) {
+                statusEl.className = 'connection-status connected';
+                textEl.textContent = 'SSE 已连接';
+            } else {
+                statusEl.className = 'connection-status disconnected';
+                textEl.textContent = 'SSE 连接断开';
+            }
+        }
+
+        async function init() {
+            await fetchConfig();
+            await fetchDevices();
+            await fetchAlerts();
+            connectSSE();
+
+            setInterval(fetchDevices, 3000);
+        }
+
+        init();
+    </script>
+</body>
+</html>
