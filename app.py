@@ -39,13 +39,21 @@ def create_app() -> Flask:
     bus_type = 'Redis' if os.environ.get('USE_REDIS', 'false').lower() == 'true' else '内存'
     auth_status = '启用' if is_auth_required() else '禁用'
     mqtt_status = '启用' if os.environ.get('USE_MQTT', 'true').lower() == 'true' else '禁用'
+    use_gunicorn = 'gunicorn' in os.environ.get('SERVER_SOFTWARE', '').lower()
+    workers = int(os.environ.get('GUNICORN_WORKERS', '1'))
     logger.info('=' * 60)
     logger.info('IoT MQTT 设备网关已启动')
     logger.info('温度阈值: %s°C', TEMPERATURE_THRESHOLD)
     logger.info('心跳超时: %s秒', HEARTBEAT_TIMEOUT)
     logger.info('消息总线: %s', bus_type)
     logger.info('MQTT 网关: %s', mqtt_status)
-    logger.info('时序存储: InfluxDB (%s)', os.environ.get('INFLUXDB_URL', 'http://localhost:8086'))
+    logger.info('时序存储: InfluxDB (%s) → 传感器数据 + 告警', os.environ.get('INFLUXDB_URL', 'http://localhost:8086'))
+    logger.info('元数据存储: SQLite (%s) → 仅设备表 (id/name/status)', 'iot_monitor.db')
+    logger.info('⚠️  双存储写路径: 每次上报 → InfluxDB 写时序 + SQLite 更新设备心跳')
+    if use_gunicorn:
+        logger.info('Gunicorn workers: %d (建议保持 1 避免 MQTT 重复订阅 & SQLite 并发写放大)', workers)
+        if workers > 1:
+            logger.warning('⚠️  workers=%d > 1: 多 worker 将重复启动 MQTT/MQTT会重复订阅造成消息风暴，SQLite 多进程写会放大锁竞争')
     logger.info('API 认证: %s', auth_status)
     logger.info('访问 http://localhost:5000 查看监控入口')
     logger.info('Grafana 仪表盘: %s/d/%s', GRAFANA_URL, GRAFANA_DASHBOARD_UID)

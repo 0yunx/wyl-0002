@@ -6,6 +6,8 @@ from typing import Optional, List, Dict, Any
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 
+HEARTBEAT_TIMEOUT = int(os.environ.get('HEARTBEAT_TIMEOUT', '30'))
+
 logger = logging.getLogger(__name__)
 
 INFLUXDB_URL = os.environ.get('INFLUXDB_URL', 'http://localhost:8086')
@@ -157,7 +159,7 @@ def query_recent_sensor_data(device_id: Optional[str] = None,
 def query_latest_sensor_data(device_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     client = get_client()
     stop = datetime.utcnow()
-    start = stop - timedelta(hours=24)
+    start = stop - timedelta(minutes=max(5, HEARTBEAT_TIMEOUT * 2))
 
     flux_query = f'''
     from(bucket: "{INFLUXDB_BUCKET}")
@@ -166,11 +168,11 @@ def query_latest_sensor_data(device_id: Optional[str] = None) -> Dict[str, Dict[
     '''
     if device_id:
         flux_query += f'  |> filter(fn: (r) => r["device_id"] == "{device_id}")\n'
-    flux_query += '''
-      |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+    flux_query += f'''
       |> group(columns: ["device_id"])
-      |> sort(columns: ["_time"], desc: true)
-      |> limit(n: 1)
+      |> last()
+      |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+      |> keep(columns: ["device_id", "temperature", "humidity", "_time"])
     '''
 
     try:
