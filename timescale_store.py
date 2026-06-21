@@ -135,10 +135,13 @@ async def write_alert(
         await conn.execute(
             '''
             INSERT INTO alerts (time, device_id, alert_type, message, acknowledged)
-            VALUES (%s, %s, %s, %s, FALSE)
-            ON CONFLICT (time, device_id, alert_type) DO NOTHING
+            SELECT %s, %s, %s, %s, FALSE
+            WHERE NOT EXISTS (
+                SELECT 1 FROM alerts
+                WHERE device_id = %s AND alert_type = %s AND acknowledged = FALSE
+            )
             ''',
-            (timestamp, device_id, alert_type, str(message)),
+            (timestamp, device_id, alert_type, str(message), device_id, alert_type),
         )
     logger.debug('写入告警到 TimescaleDB: %s type=%s', device_id, alert_type)
 
@@ -469,25 +472,32 @@ async def check_heartbeat() -> List[Dict[str, Any]]:
 
                 alert_msg = f'{device_name} 已离线，超过 {HEARTBEAT_TIMEOUT} 秒无心跳'
                 alert_time = _utcnow()
-                await conn.execute(
+                cur = await conn.execute(
                     '''
                     INSERT INTO alerts (time, device_id, alert_type, message, acknowledged)
-                    VALUES (%s, %s, 'offline', %s, FALSE)
-                    ON CONFLICT (time, device_id, alert_type) DO NOTHING
+                    SELECT %s, %s, 'offline', %s, FALSE
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM alerts
+                        WHERE device_id = %s AND alert_type = 'offline' AND acknowledged = FALSE
+                    )
                     ''',
-                    (alert_time, device_id, alert_msg),
+                    (alert_time, device_id, alert_msg, device_id),
                 )
+                inserted = cur.rowcount is not None and cur.rowcount > 0
 
-                alerts.append({
-                    'device_id': device_id,
-                    'alert_type': 'offline',
-                    'message': alert_msg,
-                    'timestamp': alert_time.isoformat(),
-                    'alert_id': f"{alert_time.isoformat()}|{device_id}|offline",
-                    'acknowledged': False,
-                    'device_name': device_name,
-                })
-                logger.warning('设备离线告警: %s', alert_msg)
+                if inserted:
+                    alerts.append({
+                        'device_id': device_id,
+                        'alert_type': 'offline',
+                        'message': alert_msg,
+                        'timestamp': alert_time.isoformat(),
+                        'alert_id': f"{alert_time.isoformat()}|{device_id}|offline",
+                        'acknowledged': False,
+                        'device_name': device_name,
+                    })
+                    logger.warning('设备离线告警: %s', alert_msg)
+                else:
+                    logger.debug('设备 %s 已存在未确认离线告警,跳过重复插入', device_id)
 
             cur = await conn.execute(
                 '''
@@ -506,25 +516,32 @@ async def check_heartbeat() -> List[Dict[str, Any]]:
 
                 alert_msg = f'{device_name} 温度过高: {temperature:.1f}°C (阈值: {TEMPERATURE_THRESHOLD_GLOBAL}°C)'
                 alert_time = _utcnow()
-                await conn.execute(
+                cur = await conn.execute(
                     '''
                     INSERT INTO alerts (time, device_id, alert_type, message, acknowledged)
-                    VALUES (%s, %s, 'temperature', %s, FALSE)
-                    ON CONFLICT (time, device_id, alert_type) DO NOTHING
+                    SELECT %s, %s, 'temperature', %s, FALSE
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM alerts
+                        WHERE device_id = %s AND alert_type = 'temperature' AND acknowledged = FALSE
+                    )
                     ''',
-                    (alert_time, device_id, alert_msg),
+                    (alert_time, device_id, alert_msg, device_id),
                 )
+                inserted = cur.rowcount is not None and cur.rowcount > 0
 
-                alerts.append({
-                    'device_id': device_id,
-                    'alert_type': 'temperature',
-                    'message': alert_msg,
-                    'timestamp': alert_time.isoformat(),
-                    'alert_id': f"{alert_time.isoformat()}|{device_id}|temperature",
-                    'acknowledged': False,
-                    'device_name': device_name,
-                })
-                logger.warning('温度告警: %s', alert_msg)
+                if inserted:
+                    alerts.append({
+                        'device_id': device_id,
+                        'alert_type': 'temperature',
+                        'message': alert_msg,
+                        'timestamp': alert_time.isoformat(),
+                        'alert_id': f"{alert_time.isoformat()}|{device_id}|temperature",
+                        'acknowledged': False,
+                        'device_name': device_name,
+                    })
+                    logger.warning('温度告警: %s', alert_msg)
+                else:
+                    logger.debug('设备 %s 已存在未确认温度告警,跳过重复插入', device_id)
 
     if alerts:
         logger.info('生成 %d 条告警', len(alerts))
