@@ -4,11 +4,13 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from models import insert_sensor_data, check_heartbeat, get_all_devices
 from message_bus import publish_alert
+from mqtt_client import start_mqtt_gateway, stop_mqtt_gateway, is_running as is_mqtt_running
 
 logger = logging.getLogger(__name__)
 
 sensor_states = {}
 _scheduler_instance = None
+_mqtt_started = False
 
 
 def init_sensor_states():
@@ -115,7 +117,7 @@ def should_start_scheduler() -> bool:
 
 
 def start_scheduler():
-    global _scheduler_instance
+    global _scheduler_instance, _mqtt_started
     if _scheduler_instance is not None:
         logger.warning('Scheduler already running, returning existing instance')
         return _scheduler_instance
@@ -125,20 +127,34 @@ def start_scheduler():
                    os.environ.get('SCHEDULER_MODE', 'auto'))
         return None
 
+    use_mqtt = os.environ.get('USE_MQTT', 'true').lower() == 'true'
+    if use_mqtt and not _mqtt_started:
+        logger.info('Starting MQTT gateway...')
+        try:
+            mqtt_ok = start_mqtt_gateway(callback=on_mqtt_message)
+            if mqtt_ok:
+                _mqtt_started = True
+                logger.info('MQTT gateway started successfully')
+            else:
+                logger.warning('MQTT gateway failed to start, falling back to simulator')
+        except Exception as e:
+            logger.error('Failed to start MQTT gateway: %s', e, exc_info=True)
+
     init_sensor_states()
 
     scheduler = BackgroundScheduler(logger=logger)
 
-    scheduler.add_job(
-        simulate_sensor_data,
-        'interval',
-        seconds=3,
-        id='simulate_sensor_data',
-        replace_existing=True,
-        misfire_grace_time=10,
-        coalesce=True
-    )
-    logger.info('Added job: simulate_sensor_data (every 3s)')
+    if not use_mqtt or not _mqtt_started:
+        scheduler.add_job(
+            simulate_sensor_data,
+            'interval',
+            seconds=3,
+            id='simulate_sensor_data',
+            replace_existing=True,
+            misfire_grace_time=10,
+            coalesce=True
+        )
+        logger.info('Added job: simulate_sensor_data (every 3s)')
 
     scheduler.add_job(
         heartbeat_check_job,
@@ -158,9 +174,27 @@ def start_scheduler():
 
 
 def stop_scheduler():
-    global _scheduler_instance
+    global _scheduler_instance, _mqtt_started
     if _scheduler_instance is not None:
         logger.info('Shutting down scheduler...')
         _scheduler_instance.shutdown(wait=False)
         _scheduler_instance = None
         logger.info('Scheduler stopped')
+
+    if _mqtt_started:
+        logger.info('Stopping MQTT gateway...')
+        try:
+            stop_mqtt_gateway()
+        except Exception as e:
+            logger.warning('Error stopping MQTT gateway: %s', e)
+        _mqtt_started = False
+        logger.info('MQTT gateway stopped')
+
+
+def on_mqtt_message(message_data: dict) -> None:
+    alert = message_data.get('alert')
+    if alert:
+        try:
+            publish_alert(alert)
+        except Exception as e:
+            logger.error('Failed to publish alert from MQTT: %s', e, exc_info=True)

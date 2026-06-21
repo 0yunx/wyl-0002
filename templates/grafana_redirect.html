@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>跳转到 Grafana 仪表盘</title>
+    <meta http-equiv="refresh" content="3;url={{ dashboard_url }}">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e4e4e7;
+        }
+        .redirect-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 48px;
+            backdrop-filter: blur(10px);
+            text-align: center;
+            max-width: 480px;
+        }
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(96, 165, 250, 0.2);
+            border-top-color: #60a5fa;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 24px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        h1 {
+            font-size: 1.5rem;
+            color: #60a5fa;
+            margin-bottom: 12px;
+        }
+        p {
+            color: #94a3b8;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+        .link {
+            display: inline-block;
+            padding: 10px 24px;
+            background: rgba(96, 165, 250, 0.2);
+            color: #60a5fa;
+            text-decoration: none;
+            border-radius: 8px;
+            border: 1px solid rgba(96, 165, 250, 0.3);
+            transition: all 0.2s;
+        }
+        .link:hover {
+            background: rgba(96, 165, 250, 0.3);
+        }
+        .back-link {
+            display: block;
+            margin-top: 16px;
+            color: #64748b;
+            font-size: 0.85rem;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="redirect-card">
+        <div class="spinner"></div>
+        <h1>正在跳转到 Grafana 仪表盘</h1>
+        <p>如果页面没有自动跳转，请点击下方链接直接访问</p>
+        <a href="{{ dashboard_url }}" class="link" target="_blank">打开 Grafana 仪表盘</a>
+        <a href="/" class="back-link">← 返回监控入口</a>
+    </div>
+</body>
+</html>

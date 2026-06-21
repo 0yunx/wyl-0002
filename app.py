@@ -2,13 +2,17 @@ import json
 import queue
 import logging
 import os
-from flask import Flask, render_template, jsonify, Response, request, g
+from flask import Flask, render_template, jsonify, Response, request, g, send_from_directory
 from models import init_db, get_all_devices, get_recent_alerts, TEMPERATURE_THRESHOLD, HEARTBEAT_TIMEOUT
 from scheduler import start_scheduler, stop_scheduler, set_sensor_enabled, set_sensor_temp_boost, get_sensor_states
 from message_bus import subscribe_alerts, unsubscribe_alerts
 from auth import init_app as init_auth, is_auth_required
+from influx_store import query_recent_sensor_data
 
 logger = logging.getLogger(__name__)
+
+GRAFANA_URL = os.environ.get('GRAFANA_URL', 'http://localhost:3000')
+GRAFANA_DASHBOARD_UID = os.environ.get('GRAFANA_DASHBOARD_UID', 'iot-monitor-dashboard')
 
 
 def setup_logging():
@@ -34,13 +38,17 @@ def create_app() -> Flask:
 
     bus_type = 'Redis' if os.environ.get('USE_REDIS', 'false').lower() == 'true' else '内存'
     auth_status = '启用' if is_auth_required() else '禁用'
+    mqtt_status = '启用' if os.environ.get('USE_MQTT', 'true').lower() == 'true' else '禁用'
     logger.info('=' * 60)
-    logger.info('IoT 心跳监控网关已启动')
+    logger.info('IoT MQTT 设备网关已启动')
     logger.info('温度阈值: %s°C', TEMPERATURE_THRESHOLD)
     logger.info('心跳超时: %s秒', HEARTBEAT_TIMEOUT)
     logger.info('消息总线: %s', bus_type)
+    logger.info('MQTT 网关: %s', mqtt_status)
+    logger.info('时序存储: InfluxDB (%s)', os.environ.get('INFLUXDB_URL', 'http://localhost:8086'))
     logger.info('API 认证: %s', auth_status)
-    logger.info('访问 http://localhost:5000 查看监控面板')
+    logger.info('访问 http://localhost:5000 查看监控入口')
+    logger.info('Grafana 仪表盘: %s/d/%s', GRAFANA_URL, GRAFANA_DASHBOARD_UID)
     logger.info('=' * 60)
 
     def event_stream(client_ip, client_id):
@@ -111,12 +119,49 @@ def create_app() -> Flask:
     @app.route('/api/config')
     def api_config():
         bus_type = 'redis' if os.environ.get('USE_REDIS', 'false').lower() == 'true' else 'memory'
+        mqtt_enabled = os.environ.get('USE_MQTT', 'true').lower() == 'true'
         return jsonify({
             'temperature_threshold': TEMPERATURE_THRESHOLD,
             'heartbeat_timeout': HEARTBEAT_TIMEOUT,
             'message_bus': bus_type,
-            'auth_required': is_auth_required()
+            'auth_required': is_auth_required(),
+            'mqtt_enabled': mqtt_enabled,
+            'mqtt_broker': os.environ.get('MQTT_BROKER_HOST', 'localhost'),
+            'mqtt_port': int(os.environ.get('MQTT_BROKER_PORT', '1883')),
+            'mqtt_topic': os.environ.get('MQTT_TOPIC', '/sensor/+/data'),
+            'influxdb_url': os.environ.get('INFLUXDB_URL', 'http://localhost:8086'),
+            'influxdb_bucket': os.environ.get('INFLUXDB_BUCKET', 'iot_monitor'),
+            'grafana_url': GRAFANA_URL,
+            'grafana_dashboard_uid': GRAFANA_DASHBOARD_UID
         })
+
+    @app.route('/api/sensor/<device_id>/history')
+    def api_sensor_history(device_id):
+        try:
+            minutes = int(request.args.get('minutes', 5))
+            data = query_recent_sensor_data(device_id=device_id, minutes=minutes)
+            return jsonify(data)
+        except Exception as e:
+            logger.error('Sensor history API error: %s', e, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
+    @app.route('/api/grafana/dashboard')
+    def api_grafana_dashboard():
+        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'grafana_dash.json')
+        if os.path.exists(dashboard_path):
+            return send_from_directory(
+                os.path.dirname(dashboard_path),
+                'grafana_dash.json',
+                mimetype='application/json',
+                as_attachment=True,
+                download_name='grafana_dash.json'
+            )
+        return jsonify({'error': 'Dashboard file not found'}), 404
+
+    @app.route('/grafana')
+    def grafana_redirect():
+        dashboard_url = f'{GRAFANA_URL}/d/{GRAFANA_DASHBOARD_UID}'
+        return render_template('grafana_redirect.html', dashboard_url=dashboard_url)
 
     @app.route('/api/sensor/<device_id>/disable', methods=['POST'])
     def disable_sensor(device_id):

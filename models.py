@@ -3,6 +3,14 @@ import threading
 import logging
 from datetime import datetime, timedelta
 
+from influx_store import (
+    write_sensor_data as influx_write_sensor,
+    write_alert as influx_write_alert,
+    query_recent_alerts as influx_query_alerts,
+    query_latest_sensor_data as influx_query_latest,
+    init_influx
+)
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = 'iot_monitor.db'
@@ -53,31 +61,6 @@ def init_db():
                 )
             ''')
 
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS sensor_data (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id TEXT NOT NULL,
-                    temperature REAL NOT NULL,
-                    humidity REAL NOT NULL,
-                    timestamp DATETIME NOT NULL,
-                    FOREIGN KEY (device_id) REFERENCES devices (id)
-                )
-            ''')
-
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS alerts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id TEXT NOT NULL,
-                    alert_type TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    timestamp DATETIME NOT NULL,
-                    acknowledged INTEGER DEFAULT 0,
-                    FOREIGN KEY (device_id) REFERENCES devices (id)
-                )
-            ''')
-
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sensor_data_device_time ON sensor_data(device_id, timestamp DESC)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_alerts_timestamp ON alerts(timestamp DESC)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)')
 
             cursor.execute('SELECT COUNT(*) FROM devices')
@@ -99,6 +82,11 @@ def init_db():
         finally:
             conn.close()
 
+    try:
+        init_influx()
+    except Exception as e:
+        logger.warning('InfluxDB initialization failed (will retry on write): %s', e)
+
 
 def get_db_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -109,15 +97,15 @@ def get_db_connection() -> sqlite3.Connection:
 
 def insert_sensor_data(device_id, temperature, humidity):
     timestamp = datetime.now().isoformat()
+    try:
+        influx_write_sensor(device_id, temperature, humidity)
+    except Exception as e:
+        logger.error('Failed to write sensor data to InfluxDB for %s: %s', device_id, e)
+
     with db_lock:
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
-
-            cursor.execute('''
-                INSERT INTO sensor_data (device_id, temperature, humidity, timestamp)
-                VALUES (?, ?, ?, ?)
-            ''', (device_id, temperature, humidity, timestamp))
 
             cursor.execute('''
                 UPDATE devices
@@ -129,7 +117,7 @@ def insert_sensor_data(device_id, temperature, humidity):
             logger.debug('Inserted sensor data for %s: temp=%.1f, humidity=%.1f',
                         device_id, temperature, humidity)
         except Exception as e:
-            logger.error('Failed to insert sensor data for %s: %s', device_id, e, exc_info=True)
+            logger.error('Failed to update device meta for %s: %s', device_id, e, exc_info=True)
             conn.rollback()
             raise
         finally:
@@ -162,20 +150,17 @@ def check_heartbeat():
                     UPDATE devices SET status = 'offline' WHERE id = ?
                 ''', (device_id,))
 
+                alert_msg = f'{device_name} 已离线，超过 {HEARTBEAT_TIMEOUT} 秒无心跳'
                 cursor.execute('''
-                    SELECT COUNT(*) FROM alerts
-                    WHERE device_id = ? AND alert_type = 'offline' AND acknowledged = 0
+                    SELECT id FROM devices WHERE id = ? AND status = 'offline'
                 ''', (device_id,))
-
-                if cursor.fetchone()[0] == 0:
-                    alert_msg = f'{device_name} 已离线，超过 {HEARTBEAT_TIMEOUT} 秒无心跳'
-                    cursor.execute('''
-                        INSERT INTO alerts (device_id, alert_type, message, timestamp)
-                        VALUES (?, 'offline', ?, ?)
-                    ''', (device_id, alert_msg, datetime.now().isoformat()))
+                if cursor.fetchone():
+                    try:
+                        influx_write_alert(device_id, 'offline', alert_msg)
+                    except Exception as e:
+                        logger.error('Failed to write offline alert to InfluxDB: %s', e)
 
                     alerts.append({
-                        'id': cursor.lastrowid,
                         'device_id': device_id,
                         'alert_type': 'offline',
                         'message': alert_msg,
@@ -196,26 +181,19 @@ def check_heartbeat():
                 device_name = device['name']
                 temperature = device['temperature']
 
-                cursor.execute('''
-                    SELECT COUNT(*) FROM alerts
-                    WHERE device_id = ? AND alert_type = 'temperature' AND acknowledged = 0
-                ''', (device_id,))
+                alert_msg = f'{device_name} 温度过高: {temperature:.1f}°C (阈值: {TEMPERATURE_THRESHOLD}°C)'
+                try:
+                    influx_write_alert(device_id, 'temperature', alert_msg)
+                except Exception as e:
+                    logger.error('Failed to write temperature alert to InfluxDB: %s', e)
 
-                if cursor.fetchone()[0] == 0:
-                    alert_msg = f'{device_name} 温度过高: {temperature:.1f}°C (阈值: {TEMPERATURE_THRESHOLD}°C)'
-                    cursor.execute('''
-                        INSERT INTO alerts (device_id, alert_type, message, timestamp)
-                        VALUES (?, 'temperature', ?, ?)
-                    ''', (device_id, alert_msg, datetime.now().isoformat()))
-
-                    alerts.append({
-                        'id': cursor.lastrowid,
-                        'device_id': device_id,
-                        'alert_type': 'temperature',
-                        'message': alert_msg,
-                        'timestamp': datetime.now().isoformat()
-                    })
-                    logger.warning('Temperature alert: %s', alert_msg)
+                alerts.append({
+                    'device_id': device_id,
+                    'alert_type': 'temperature',
+                    'message': alert_msg,
+                    'timestamp': datetime.now().isoformat()
+                })
+                logger.warning('Temperature alert: %s', alert_msg)
 
             conn.commit()
             if alerts:
@@ -246,25 +224,40 @@ def get_all_devices():
 
 
 def get_recent_alerts(limit=20):
-    with db_lock:
-        conn = get_db_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT a.*, d.name as device_name
-                FROM alerts a
-                JOIN devices d ON a.device_id = d.id
-                ORDER BY a.timestamp DESC
-                LIMIT ?
-            ''', (limit,))
-            alerts = [dict(row) for row in cursor.fetchall()]
-            logger.debug('Fetched %d recent alerts', len(alerts))
-            return alerts
-        except Exception as e:
-            logger.error('Failed to fetch alerts: %s', e, exc_info=True)
-            raise
-        finally:
-            conn.close()
+    try:
+        alerts = influx_query_alerts(limit=limit)
+        with db_lock:
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                for alert in alerts:
+                    cursor.execute('SELECT name FROM devices WHERE id = ?', (alert['device_id'],))
+                    row = cursor.fetchone()
+                    if row:
+                        alert['device_name'] = row['name']
+                    else:
+                        alert['device_name'] = alert['device_id']
+                return alerts
+            finally:
+                conn.close()
+    except Exception as e:
+        logger.error('Failed to fetch alerts from InfluxDB, falling back: %s', e)
+        with db_lock:
+            conn = get_db_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT a.*, d.name as device_name
+                    FROM (
+                        SELECT 'unknown' as device_id, 'error' as alert_type, 
+                               'InfluxDB unavailable' as message, ? as timestamp, 0 as acknowledged
+                    ) a
+                    LEFT JOIN devices d ON a.device_id = d.id
+                    LIMIT ?
+                ''', (datetime.now().isoformat(), limit))
+                return [dict(row) for row in cursor.fetchall()]
+            finally:
+                conn.close()
 
 
 def get_device_status(device_id):

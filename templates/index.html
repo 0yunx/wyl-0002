@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IoT 设备心跳监控网关</title>
+    <title>IoT MQTT 设备网关 - 监控入口</title>
     <style>
         * {
             margin: 0;
@@ -22,9 +22,9 @@
         .header {
             text-align: center;
             margin-bottom: 30px;
-            padding: 20px;
+            padding: 30px;
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
+            border-radius: 16px;
             backdrop-filter: blur(10px);
         }
 
@@ -37,6 +37,76 @@
         .header p {
             color: #94a3b8;
             font-size: 0.95rem;
+        }
+
+        .grafana-entry {
+            max-width: 800px;
+            margin: 0 auto 30px;
+            background: linear-gradient(135deg, rgba(96, 165, 250, 0.15) 0%, rgba(139, 92, 246, 0.15) 100%);
+            border: 2px solid rgba(96, 165, 250, 0.3);
+            border-radius: 16px;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .grafana-icon {
+            font-size: 3rem;
+            margin-bottom: 16px;
+        }
+
+        .grafana-entry h2 {
+            font-size: 1.5rem;
+            color: #60a5fa;
+            margin-bottom: 12px;
+        }
+
+        .grafana-entry p {
+            color: #94a3b8;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+
+        .grafana-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4);
+        }
+
+        .grafana-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 30px rgba(59, 130, 246, 0.5);
+        }
+
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #94a3b8;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+            margin-top: 16px;
+        }
+
+        .download-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #e4e4e7;
         }
 
         .status-bar {
@@ -83,11 +153,41 @@
             50% { opacity: 0.5; }
         }
 
+        .system-info {
+            max-width: 800px;
+            margin: 0 auto 25px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .info-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            padding: 16px;
+            backdrop-filter: blur(10px);
+        }
+
+        .info-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .info-value {
+            font-size: 0.95rem;
+            color: #e4e4e7;
+            font-weight: 500;
+            word-break: break-all;
+        }
+
         .main-container {
             display: grid;
             grid-template-columns: 1fr 400px;
             gap: 25px;
-            max-width: 1600px;
+            max-width: 1400px;
             margin: 0 auto;
         }
 
@@ -99,7 +199,7 @@
 
         .devices-section h2,
         .alerts-section h2 {
-            font-size: 1.3rem;
+            font-size: 1.2rem;
             margin-bottom: 15px;
             color: #93c5fd;
             display: flex;
@@ -109,14 +209,14 @@
 
         .devices-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-            gap: 15px;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
         }
 
         .device-card {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 18px;
+            border-radius: 10px;
+            padding: 14px;
             border: 2px solid transparent;
             transition: all 0.3s ease;
             backdrop-filter: blur(10px);
@@ -140,18 +240,18 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
 
         .device-name {
             font-weight: 600;
-            font-size: 1rem;
+            font-size: 0.9rem;
         }
 
         .device-status {
-            font-size: 0.75rem;
-            padding: 4px 10px;
-            border-radius: 12px;
+            font-size: 0.7rem;
+            padding: 3px 8px;
+            border-radius: 10px;
             font-weight: 500;
             text-transform: uppercase;
         }
@@ -174,27 +274,27 @@
         .device-data {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-bottom: 12px;
+            gap: 8px;
+            margin-bottom: 10px;
         }
 
         .data-item {
             background: rgba(0, 0, 0, 0.2);
-            padding: 10px;
-            border-radius: 8px;
+            padding: 8px;
+            border-radius: 6px;
             text-align: center;
         }
 
         .data-label {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: #94a3b8;
-            margin-bottom: 4px;
+            margin-bottom: 3px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
 
         .data-value {
-            font-size: 1.25rem;
+            font-size: 1rem;
             font-weight: 700;
         }
 
@@ -217,63 +317,9 @@
         }
 
         .device-time {
-            font-size: 0.75rem;
+            font-size: 0.7rem;
             color: #64748b;
             text-align: center;
-            margin-bottom: 12px;
-        }
-
-        .device-controls {
-            display: flex;
-            gap: 8px;
-        }
-
-        .btn {
-            flex: 1;
-            padding: 8px 12px;
-            border: none;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn-danger {
-            background: rgba(239, 68, 68, 0.2);
-            color: #ef4444;
-            border: 1px solid rgba(239, 68, 68, 0.3);
-        }
-
-        .btn-danger:hover:not(:disabled) {
-            background: rgba(239, 68, 68, 0.3);
-        }
-
-        .btn-success {
-            background: rgba(34, 197, 94, 0.2);
-            color: #22c55e;
-            border: 1px solid rgba(34, 197, 94, 0.3);
-        }
-
-        .btn-success:hover:not(:disabled) {
-            background: rgba(34, 197, 94, 0.3);
-        }
-
-        .btn-warning {
-            background: rgba(245, 158, 11, 0.2);
-            color: #f59e0b;
-            border: 1px solid rgba(245, 158, 11, 0.3);
-        }
-
-        .btn-warning:hover:not(:disabled) {
-            background: rgba(245, 158, 11, 0.3);
         }
 
         .alerts-section {
@@ -345,7 +391,7 @@
         }
 
         .alert-type {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             padding: 3px 8px;
             border-radius: 10px;
             font-weight: 600;
@@ -368,7 +414,7 @@
         }
 
         .alert-message {
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             color: #e4e4e7;
             line-height: 1.4;
         }
@@ -403,14 +449,27 @@
 </head>
 <body>
     <div class="header">
-        <h1>🌡️ IoT 设备心跳监控网关</h1>
+        <h1>🌡️ IoT MQTT 设备网关</h1>
         <p>
-            实时监控 10 台温湿度传感器 | 温度阈值: <span id="temp-threshold">35</span>°C | 心跳超时: <span id="hb-timeout">30</span>秒
+            MQTT 设备网关 | 温度阈值: <span id="temp-threshold">35</span>°C | 心跳超时: <span id="hb-timeout">30</span>秒
             <span id="connection-status" class="connection-status disconnected">
                 <span class="status-dot"></span>
                 <span id="connection-text">SSE 未连接</span>
             </span>
         </p>
+    </div>
+
+    <div class="grafana-entry">
+        <div class="grafana-icon">📊</div>
+        <h2>Grafana 可视化仪表盘</h2>
+        <p>前往 Grafana 查看温度曲线、湿度趋势、历史告警等完整可视化面板。支持最近 5 分钟、1 小时、24 小时等多时间维度分析。</p>
+        <a href="/grafana" class="grafana-btn" target="_blank">
+            🚀 打开 Grafana 仪表盘
+        </a>
+        <br>
+        <a href="/api/grafana/dashboard" class="download-btn">
+            📥 下载 Grafana 面板 JSON
+        </a>
     </div>
 
     <div class="status-bar">
@@ -428,9 +487,11 @@
         </div>
     </div>
 
+    <div class="system-info" id="system-info"></div>
+
     <div class="main-container">
         <div class="devices-section">
-            <h2>📦 设备列表</h2>
+            <h2>📦 设备状态概览</h2>
             <div class="devices-grid" id="devices-grid"></div>
         </div>
 
@@ -465,6 +526,28 @@
             if (device.status === 'offline') return 'offline';
             if (device.temperature !== null && device.temperature > config.temperature_threshold) return 'warning';
             return 'online';
+        }
+
+        function renderSystemInfo() {
+            const container = document.getElementById('system-info');
+            container.innerHTML = `
+                <div class="info-card">
+                    <div class="info-label">MQTT Broker</div>
+                    <div class="info-value">${config.mqtt_broker || 'localhost'}:${config.mqtt_port || 1883}</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">订阅主题</div>
+                    <div class="info-value">${config.mqtt_topic || '/sensor/+/data'}</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">InfluxDB</div>
+                    <div class="info-value">${config.influxdb_url || 'http://localhost:8086'}</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-label">存储 Bucket</div>
+                    <div class="info-value">${config.influxdb_bucket || 'iot_monitor'}</div>
+                </div>
+            `;
         }
 
         function renderDevices() {
@@ -504,18 +587,7 @@
                         </div>
                     </div>
                     <div class="device-time">
-                        最后心跳: ${formatTime(device.last_heartbeat)}
-                    </div>
-                    <div class="device-controls">
-                        <button class="btn ${device.simulator_enabled ? 'btn-danger' : 'btn-success'}" 
-                                onclick="toggleSensor('${device.id}', ${device.simulator_enabled})"
-                                ${device.status === 'offline' && !device.simulator_enabled ? '' : ''}>
-                            ${device.simulator_enabled ? '断开' : '恢复'}
-                        </button>
-                        <button class="btn ${device.temp_boost ? 'btn-warning' : 'btn-warning'}" 
-                                onclick="toggleTempBoost('${device.id}', ${device.temp_boost})">
-                            ${device.temp_boost ? '降' : '升'}温
-                        </button>
+                        心跳: ${formatTime(device.last_heartbeat)}
                     </div>
                 `;
 
@@ -576,39 +648,9 @@
                 config = await response.json();
                 document.getElementById('temp-threshold').textContent = config.temperature_threshold;
                 document.getElementById('hb-timeout').textContent = config.heartbeat_timeout;
+                renderSystemInfo();
             } catch (error) {
                 console.error('获取配置失败:', error);
-            }
-        }
-
-        async function toggleSensor(deviceId, currentEnabled) {
-            const endpoint = currentEnabled ? 'disable' : 'enable';
-            try {
-                const response = await fetch(`${API_BASE}/api/sensor/${deviceId}/${endpoint}`, {
-                    method: 'POST'
-                });
-                const result = await response.json();
-                if (result.success) {
-                    await fetchDevices();
-                }
-            } catch (error) {
-                console.error('操作失败:', error);
-            }
-        }
-
-        async function toggleTempBoost(deviceId, currentBoost) {
-            try {
-                const response = await fetch(`${API_BASE}/api/sensor/${deviceId}/boost`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ boost: !currentBoost })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    await fetchDevices();
-                }
-            } catch (error) {
-                console.error('操作失败:', error);
             }
         }
 
