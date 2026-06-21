@@ -1,10 +1,12 @@
 import random
-import time
+import os
 from apscheduler.schedulers.background import BackgroundScheduler
 from models import insert_sensor_data, check_heartbeat, get_all_devices
+from message_bus import publish_alert
 
 sensor_states = {}
-alert_callback = None
+_scheduler_instance = None
+
 
 def init_sensor_states():
     global sensor_states
@@ -16,6 +18,7 @@ def init_sensor_states():
             'base_humidity': random.uniform(40.0, 70.0),
             'temp_boost': False
         }
+
 
 def simulate_sensor_data():
     global sensor_states
@@ -39,12 +42,13 @@ def simulate_sensor_data():
 
         insert_sensor_data(device_id, round(temperature, 2), round(humidity, 2))
 
+
 def heartbeat_check_job():
-    global alert_callback
     alerts = check_heartbeat()
-    if alerts and alert_callback:
+    if alerts:
         for alert in alerts:
-            alert_callback(alert)
+            publish_alert(alert)
+
 
 def set_sensor_enabled(device_id, enabled):
     global sensor_states
@@ -53,6 +57,7 @@ def set_sensor_enabled(device_id, enabled):
         return True
     return False
 
+
 def set_sensor_temp_boost(device_id, boost):
     global sensor_states
     if device_id in sensor_states:
@@ -60,15 +65,37 @@ def set_sensor_temp_boost(device_id, boost):
         return True
     return False
 
+
 def get_sensor_states():
     global sensor_states
     return sensor_states.copy()
 
-def set_alert_callback(callback):
-    global alert_callback
-    alert_callback = callback
+
+def should_start_scheduler() -> bool:
+    mode = os.environ.get('SCHEDULER_MODE', 'auto').lower()
+    if mode == 'always':
+        return True
+    if mode == 'never':
+        return False
+    if mode == 'auto':
+        is_gunicorn = 'gunicorn' in os.environ.get('SERVER_SOFTWARE', '').lower()
+        if is_gunicorn:
+            worker_id = os.environ.get('GUNICORN_WORKER_ID', '')
+            return worker_id == '0' or worker_id == ''
+        return True
+    return False
+
 
 def start_scheduler():
+    global _scheduler_instance
+    if _scheduler_instance is not None:
+        return _scheduler_instance
+
+    if not should_start_scheduler():
+        print('[INFO] 此 worker 不启动调度器 (SCHEDULER_MODE={})'.format(
+            os.environ.get('SCHEDULER_MODE', 'auto')))
+        return None
+
     init_sensor_states()
 
     scheduler = BackgroundScheduler()
@@ -90,4 +117,14 @@ def start_scheduler():
     )
 
     scheduler.start()
+    _scheduler_instance = scheduler
+    print('[INFO] 调度器已启动')
     return scheduler
+
+
+def stop_scheduler():
+    global _scheduler_instance
+    if _scheduler_instance is not None:
+        _scheduler_instance.shutdown()
+        _scheduler_instance = None
+        print('[INFO] 调度器已停止')

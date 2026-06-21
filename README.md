@@ -10,10 +10,13 @@
 - **实时推送**: 通过 SSE（Server-Sent Events）实时推送告警到前端
 - **可视化面板**: 设备状态卡片 + 告警流实时展示
 - **交互控制**: 支持手动断开/恢复传感器、调节温度
+- **水平扩展**: 支持 Gunicorn 多 worker + Redis Pub/Sub 跨进程广播
 
 ## 技术栈
 
 - **后端**: Flask + APScheduler + SQLite
+- **消息总线**: 内存模式（单进程） / Redis Pub/Sub（多进程）
+- **部署**: Gunicorn + 多 worker
 - **前端**: 原生 JavaScript (无框架)
 - **通信**: SSE 实时推送
 
@@ -24,29 +27,88 @@ wyl-0002/
 ├── app.py              # Flask 路由与 SSE 推送
 ├── scheduler.py        # 定时任务与传感器模拟
 ├── models.py           # 数据层 (SQLite)
-├── requirements.txt    # Python 依赖
+├── message_bus.py      # 消息总线抽象（内存/Redis）
+├── wsgi.py             # WSGI 入口（Gunicorn 用）
+├── gunicorn_conf.py    # Gunicorn 配置
+├── requirements.txt    # 顶层依赖
+├── requirements.lock   # 完整依赖锁定（生产部署用）
 ├── templates/
 │   └── index.html      # 前端单页面
 └── static/             # 静态资源目录
 ```
 
+## 架构设计
+
+### 消息总线抽象
+
+为了解决 Gunicorn 多 worker 下 SSE 广播失效的问题，使用了消息总线抽象层：
+
+```
+┌─────────────────┐     publish     ┌─────────────────┐     subscribe     ┌─────────────────┐
+│  调度器产生告警  │ ──────────────> │   消息总线      │ <────────────── │  SSE 连接 (Worker 1)
+└─────────────────┘                  │  (Memory/Redis) │                  └─────────────────┘
+                                      └─────────────────┘
+                                               ▲
+                                               │ subscribe
+                                               ▼
+                                      ┌─────────────────┐
+                                      │ SSE 连接 (Worker N)│
+                                      └─────────────────┘
+```
+
+- **内存模式** (`InMemoryMessageBus`)：单进程开发用，线程安全
+- **Redis 模式** (`RedisMessageBus`)：多进程生产用，跨 worker 广播
+
+### 调度器单例
+
+多 worker 环境下，调度器只在主进程（或指定 worker）启动，避免重复执行定时任务。
+
 ## 快速开始
 
 ### 1. 安装依赖
 
+开发环境：
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 启动服务
+生产环境（推荐）：
+```bash
+pip install -r requirements.lock
+```
+
+### 2. 开发模式启动（单进程）
 
 ```bash
 python app.py
 ```
 
-### 3. 访问监控面板
+### 3. 生产模式启动（多 worker + Redis）
+
+前置条件：安装并启动 Redis
+
+```bash
+# Windows (PowerShell)
+$env:USE_REDIS="true"
+$env:REDIS_URL="redis://localhost:6379/0"
+gunicorn -c gunicorn_conf.py wsgi:application
+
+# Linux/Mac
+USE_REDIS=true REDIS_URL=redis://localhost:6379/0 gunicorn -c gunicorn_conf.py wsgi:application
+```
+
+### 4. 访问监控面板
 
 打开浏览器访问: http://localhost:5000
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `USE_REDIS` | `false` | 是否启用 Redis 消息总线，多 worker 必须设为 `true` |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接地址 |
+| `SCHEDULER_MODE` | `auto` | 调度器启动模式: `always` / `never` / `auto` |
+| `GUNICORN_WORKERS` | CPU*2+1 | Gunicorn worker 数量 |
 
 ## 验证步骤
 
@@ -133,6 +195,24 @@ python app.py
 | message | TEXT | 告警消息 |
 | timestamp | DATETIME | 告警时间 |
 | acknowledged | INTEGER | 是否已确认 |
+
+## 依赖管理
+
+- `requirements.txt`: 顶层直接依赖，版本号明确
+- `requirements.lock`: 完整依赖锁定文件，包含所有传递依赖的精确版本
+
+生产环境部署务必使用 `requirements.lock` 确保可复现：
+
+```bash
+pip install -r requirements.lock
+```
+
+更新 lock 文件：
+
+```bash
+pip install -r requirements.txt
+pip freeze > requirements.lock
+```
 
 ## 停止服务
 
