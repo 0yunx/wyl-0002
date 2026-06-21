@@ -1,0 +1,8 @@
+# 顶层直接依赖 - 使用 pip-compile 生成 requirements.txt
+# 生成命令: pip-compile requirements.in --output-file requirements.txt
+# 或直接: pip install -r requirements.in && pip freeze > requirements.txt
+
+Flask==3.0.0
+APScheduler==3.10.4
+redis==5.0.1
+gunicorn==21.2.0

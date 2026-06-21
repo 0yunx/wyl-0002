@@ -1,120 +1,198 @@
 import json
 import queue
-import threading
+import logging
 import os
-from flask import Flask, render_template, jsonify, Response, request
+from flask import Flask, render_template, jsonify, Response, request, g
 from models import init_db, get_all_devices, get_recent_alerts, TEMPERATURE_THRESHOLD, HEARTBEAT_TIMEOUT
 from scheduler import start_scheduler, stop_scheduler, set_sensor_enabled, set_sensor_temp_boost, get_sensor_states
 from message_bus import subscribe_alerts, unsubscribe_alerts
+from auth import init_app as init_auth, is_auth_required
 
-app = Flask(__name__, static_folder='static', static_url_path='/static')
-
-
-def event_stream():
-    q = queue.Queue(maxsize=100)
-
-    def on_alert(alert):
-        try:
-            q.put(alert, block=False)
-        except queue.Full:
-            pass
-
-    subscribe_alerts(on_alert)
-
-    try:
-        yield 'data: ' + json.dumps({'type': 'connected', 'message': 'SSE 连接已建立'}, ensure_ascii=False) + '\n\n'
-
-        while True:
-            try:
-                alert = q.get(timeout=30)
-                yield 'data: ' + json.dumps({'type': 'alert', 'data': alert}, ensure_ascii=False) + '\n\n'
-            except queue.Empty:
-                yield 'data: ' + json.dumps({'type': 'ping'}, ensure_ascii=False) + '\n\n'
-    except GeneratorExit:
-        unsubscribe_alerts(on_alert)
+logger = logging.getLogger(__name__)
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-
-@app.route('/api/devices')
-def api_devices():
-    devices = get_all_devices()
-    sensor_states = get_sensor_states()
-    for device in devices:
-        state = sensor_states.get(device['id'], {})
-        device['simulator_enabled'] = state.get('enabled', True)
-        device['temp_boost'] = state.get('temp_boost', False)
-    return jsonify(devices)
-
-
-@app.route('/api/alerts')
-def api_alerts():
-    alerts = get_recent_alerts(20)
-    return jsonify(alerts)
-
-
-@app.route('/api/config')
-def api_config():
-    bus_type = os.environ.get('USE_REDIS', 'false').lower() == 'true' and 'redis' or 'memory'
-    return jsonify({
-        'temperature_threshold': TEMPERATURE_THRESHOLD,
-        'heartbeat_timeout': HEARTBEAT_TIMEOUT,
-        'message_bus': bus_type
-    })
-
-
-@app.route('/api/sensor/<device_id>/disable', methods=['POST'])
-def disable_sensor(device_id):
-    success = set_sensor_enabled(device_id, False)
-    return jsonify({'success': success, 'message': '传感器已禁用' if success else '传感器不存在'})
-
-
-@app.route('/api/sensor/<device_id>/enable', methods=['POST'])
-def enable_sensor(device_id):
-    success = set_sensor_enabled(device_id, True)
-    return jsonify({'success': success, 'message': '传感器已启用' if success else '传感器不存在'})
-
-
-@app.route('/api/sensor/<device_id>/boost', methods=['POST'])
-def boost_sensor_temp(device_id):
-    data = request.get_json() or {}
-    boost = data.get('boost', True)
-    success = set_sensor_temp_boost(device_id, boost)
-    return jsonify({'success': success, 'message': f'温度提升已{"启用" if boost else "禁用"}' if success else '传感器不存在'})
-
-
-@app.route('/events')
-def sse_events():
-    return Response(
-        event_stream(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*'
-        }
+def setup_logging():
+    log_level = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
     )
 
 
-def create_app():
+def create_app() -> Flask:
+    setup_logging()
+
+    app = Flask(__name__, static_folder='static', static_url_path='/static')
+
+    init_auth(app)
+
     init_db()
     start_scheduler()
+
+    bus_type = 'Redis' if os.environ.get('USE_REDIS', 'false').lower() == 'true' else '内存'
+    auth_status = '启用' if is_auth_required() else '禁用'
+    logger.info('=' * 60)
+    logger.info('IoT 心跳监控网关已启动')
+    logger.info('温度阈值: %s°C', TEMPERATURE_THRESHOLD)
+    logger.info('心跳超时: %s秒', HEARTBEAT_TIMEOUT)
+    logger.info('消息总线: %s', bus_type)
+    logger.info('API 认证: %s', auth_status)
+    logger.info('访问 http://localhost:5000 查看监控面板')
+    logger.info('=' * 60)
+
+    def event_stream(client_ip, client_id):
+        q = queue.Queue(maxsize=100)
+
+        def on_alert(alert):
+            try:
+                q.put(alert, block=False)
+            except queue.Full:
+                logger.warning('SSE client %s queue full, dropping alert', client_id)
+            except Exception as e:
+                logger.error('Error putting alert to SSE client %s queue: %s', client_id, e, exc_info=True)
+
+        subscribe_alerts(on_alert)
+        logger.info('SSE client connected: ip=%s, client_id=%s', client_ip, client_id)
+        connected_clients = int(os.environ.get('SSE_CLIENTS', '0')) + 1
+        os.environ['SSE_CLIENTS'] = str(connected_clients)
+
+        try:
+            yield 'data: ' + json.dumps({'type': 'connected', 'message': 'SSE 连接已建立'}, ensure_ascii=False) + '\n\n'
+
+            while True:
+                try:
+                    alert = q.get(timeout=30)
+                    yield 'data: ' + json.dumps({'type': 'alert', 'data': alert}, ensure_ascii=False) + '\n\n'
+                except queue.Empty:
+                    yield 'data: ' + json.dumps({'type': 'ping'}, ensure_ascii=False) + '\n\n'
+        except GeneratorExit:
+            logger.info('SSE client disconnected: ip=%s, client_id=%s', client_ip, client_id)
+        except Exception as e:
+            logger.error('SSE stream error for client %s: %s', client_id, e, exc_info=True)
+        finally:
+            unsubscribe_alerts(on_alert)
+            connected_clients = max(0, int(os.environ.get('SSE_CLIENTS', '0')) - 1)
+            os.environ['SSE_CLIENTS'] = str(connected_clients)
+            logger.debug('SSE client cleaned up, remaining: %d', connected_clients)
+
+    @app.route('/')
+    def index():
+        logger.debug('Page request from %s', request.remote_addr)
+        return render_template('index.html')
+
+    @app.route('/api/devices')
+    def api_devices():
+        try:
+            devices = get_all_devices()
+            sensor_states = get_sensor_states()
+            for device in devices:
+                state = sensor_states.get(device['id'], {})
+                device['simulator_enabled'] = state.get('enabled', True)
+                device['temp_boost'] = state.get('temp_boost', False)
+            logger.debug('Devices API request from %s, returned %d devices', request.remote_addr, len(devices))
+            return jsonify(devices)
+        except Exception as e:
+            logger.error('Devices API error: %s', e, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
+    @app.route('/api/alerts')
+    def api_alerts():
+        try:
+            alerts = get_recent_alerts(20)
+            logger.debug('Alerts API request from %s, returned %d alerts', request.remote_addr, len(alerts))
+            return jsonify(alerts)
+        except Exception as e:
+            logger.error('Alerts API error: %s', e, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
+    @app.route('/api/config')
+    def api_config():
+        bus_type = 'redis' if os.environ.get('USE_REDIS', 'false').lower() == 'true' else 'memory'
+        return jsonify({
+            'temperature_threshold': TEMPERATURE_THRESHOLD,
+            'heartbeat_timeout': HEARTBEAT_TIMEOUT,
+            'message_bus': bus_type,
+            'auth_required': is_auth_required()
+        })
+
+    @app.route('/api/sensor/<device_id>/disable', methods=['POST'])
+    def disable_sensor(device_id):
+        try:
+            success = set_sensor_enabled(device_id, False)
+            if success:
+                logger.info('Sensor %s disabled by %s', device_id, request.remote_addr)
+            else:
+                logger.warning('Failed to disable sensor %s: not found', device_id)
+            return jsonify({'success': success, 'message': '传感器已禁用' if success else '传感器不存在'})
+        except Exception as e:
+            logger.error('Disable sensor %s error: %s', device_id, e, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
+    @app.route('/api/sensor/<device_id>/enable', methods=['POST'])
+    def enable_sensor(device_id):
+        try:
+            success = set_sensor_enabled(device_id, True)
+            if success:
+                logger.info('Sensor %s enabled by %s', device_id, request.remote_addr)
+            else:
+                logger.warning('Failed to enable sensor %s: not found', device_id)
+            return jsonify({'success': success, 'message': '传感器已启用' if success else '传感器不存在'})
+        except Exception as e:
+            logger.error('Enable sensor %s error: %s', device_id, e, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
+    @app.route('/api/sensor/<device_id>/boost', methods=['POST'])
+    def boost_sensor_temp(device_id):
+        try:
+            data = request.get_json() or {}
+            boost = data.get('boost', True)
+            success = set_sensor_temp_boost(device_id, boost)
+            if success:
+                logger.info('Sensor %s temperature boost %s by %s', device_id,
+                           'enabled' if boost else 'disabled', request.remote_addr)
+            else:
+                logger.warning('Failed to set boost for sensor %s: not found', device_id)
+            return jsonify({'success': success, 'message': f'温度提升已{"启用" if boost else "禁用"}' if success else '传感器不存在'})
+        except Exception as e:
+            logger.error('Boost sensor %s error: %s', device_id, e, exc_info=True)
+            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
+    @app.route('/events')
+    def sse_events():
+        client_ip = request.remote_addr
+        client_id = id(request)
+        return Response(
+            event_stream(client_ip, client_id),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+
+    @app.errorhandler(404)
+    def not_found(e):
+        logger.warning('404 Not Found: %s %s', request.method, request.path)
+        return jsonify({'error': 'Not found', 'message': 'The requested resource does not exist'}), 404
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        logger.error('500 Internal Error: %s %s - %s', request.method, request.path, e, exc_info=True)
+        return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+
     return app
 
 
 if __name__ == '__main__':
     app = create_app()
-    print('IoT 心跳监控网关已启动')
-    print(f'温度阈值: {TEMPERATURE_THRESHOLD}°C')
-    print(f'心跳超时: {HEARTBEAT_TIMEOUT}秒')
-    bus_type = os.environ.get('USE_REDIS', 'false').lower() == 'true' and 'Redis' or '内存'
-    print(f'消息总线: {bus_type}')
-    print('访问 http://localhost:5000 查看监控面板')
-
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False, threaded=True)
     except (KeyboardInterrupt, SystemExit):
+        logger.info('Shutting down...')
         stop_scheduler()
+        logger.info('Shutdown complete')

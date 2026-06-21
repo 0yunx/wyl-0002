@@ -1,4 +1,19 @@
-Flask==3.0.0
+# 精确版本锁定 - 由 requirements.in 编译生成
+# 直接依赖: Flask==3.0.0, APScheduler==3.10.4, redis==5.0.1, gunicorn==21.2.0
+# 如需更新依赖: 修改 requirements.in 后执行 pip install -r requirements.in && pip freeze > requirements.txt
+
 APScheduler==3.10.4
-redis==5.0.1
+blinker==1.9.0
+click==8.4.1
+Flask==3.0.0
 gunicorn==21.2.0
+itsdangerous==2.2.0
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+packaging==26.2
+pytz==2026.2
+redis==5.0.1
+six==1.17.0
+tzdata==2026.2
+tzlocal==5.4.3
+Werkzeug==3.1.8

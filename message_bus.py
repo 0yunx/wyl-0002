@@ -2,9 +2,13 @@ import json
 import os
 import threading
 import queue
+import logging
 from typing import Optional, Callable
 
+logger = logging.getLogger(__name__)
+
 ALERT_CHANNEL = 'iot_monitor:alerts'
+
 
 class MessageBus:
     def publish(self, channel: str, message: dict) -> None:
@@ -25,25 +29,33 @@ class InMemoryMessageBus(MessageBus):
     def publish(self, channel: str, message: dict) -> None:
         with self._lock:
             callbacks = self._subscribers.get(channel, [])[:]
+
+        logger.debug('Publishing to channel %s, %d subscribers', channel, len(callbacks))
+
         for cb in callbacks:
             try:
                 cb(message)
-            except Exception:
-                pass
+            except queue.Full:
+                logger.info('Subscriber queue full, dropping message for channel %s', channel)
+            except Exception as e:
+                logger.error('Error in subscriber callback for channel %s: %s', channel, e, exc_info=True)
 
     def subscribe(self, channel: str, callback: Callable[[dict], None]) -> None:
         with self._lock:
             if channel not in self._subscribers:
                 self._subscribers[channel] = []
             self._subscribers[channel].append(callback)
+        logger.info('Subscribed to channel %s, total subscribers: %d', channel, len(self._subscribers[channel]))
 
     def unsubscribe(self, channel: str, callback: Callable[[dict], None]) -> None:
         with self._lock:
             if channel in self._subscribers:
                 try:
                     self._subscribers[channel].remove(callback)
+                    logger.info('Unsubscribed from channel %s, remaining subscribers: %d',
+                                channel, len(self._subscribers[channel]))
                 except ValueError:
-                    pass
+                    logger.warning('Attempted to unsubscribe unknown callback from channel %s', channel)
 
 
 class RedisMessageBus(MessageBus):
@@ -59,48 +71,72 @@ class RedisMessageBus(MessageBus):
         self._running = False
 
     def publish(self, channel: str, message: dict) -> None:
-        self._redis.publish(channel, json.dumps(message, ensure_ascii=False))
+        try:
+            payload = json.dumps(message, ensure_ascii=False)
+            receivers = self._redis.publish(channel, payload)
+            logger.debug('Published to channel %s, %d receivers', channel, receivers)
+        except Exception as e:
+            logger.error('Failed to publish to Redis channel %s: %s', channel, e, exc_info=True)
+            raise
 
     def subscribe(self, channel: str, callback: Callable[[dict], None]) -> None:
         with self._lock:
             if channel not in self._subscribers:
                 self._subscribers[channel] = []
                 self._pubsub.subscribe(**{channel: self._handle_message})
+                logger.info('Subscribed to Redis channel %s', channel)
                 if not self._running:
                     self._running = True
-                    self._thread = threading.Thread(target=self._listen, daemon=True)
+                    self._thread = threading.Thread(target=self._listen, daemon=True, name='redis-pubsub')
                     self._thread.start()
+                    logger.info('Redis pubsub listener thread started')
             self._subscribers[channel].append(callback)
+            logger.info('Added callback to channel %s, total: %d', channel, len(self._subscribers[channel]))
 
     def unsubscribe(self, channel: str, callback: Callable[[dict], None]) -> None:
         with self._lock:
             if channel in self._subscribers:
                 try:
                     self._subscribers[channel].remove(callback)
+                    logger.info('Removed callback from channel %s, remaining: %d',
+                                channel, len(self._subscribers[channel]))
                 except ValueError:
-                    pass
+                    logger.warning('Attempted to unsubscribe unknown callback from channel %s', channel)
 
     def _handle_message(self, message):
-        if message['type'] == 'message':
+        if message['type'] != 'message':
+            return
+
+        channel = message['channel']
+        try:
+            data = json.loads(message['data'])
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error('Failed to parse message from channel %s: %s', channel, e)
+            return
+
+        with self._lock:
+            callbacks = self._subscribers.get(channel, [])[:]
+
+        logger.debug('Received message on channel %s, dispatching to %d subscribers', channel, len(callbacks))
+
+        for cb in callbacks:
             try:
-                data = json.loads(message['data'])
-            except (json.JSONDecodeError, TypeError):
-                return
-            channel = message['channel']
-            with self._lock:
-                callbacks = self._subscribers.get(channel, [])[:]
-            for cb in callbacks:
-                try:
-                    cb(data)
-                except Exception:
-                    pass
+                cb(data)
+            except queue.Full:
+                logger.info('Subscriber queue full, dropping message from channel %s', channel)
+            except Exception as e:
+                logger.error('Error in subscriber callback for channel %s: %s', channel, e, exc_info=True)
 
     def _listen(self):
+        logger.info('Redis pubsub listener started')
         try:
             for _ in self._pubsub.listen():
                 pass
-        except Exception:
+        except Exception as e:
+            logger.error('Redis pubsub listener error: %s', e, exc_info=True)
             self._running = False
+        finally:
+            logger.info('Redis pubsub listener stopped')
 
 
 _default_bus: Optional[MessageBus] = None
@@ -116,11 +152,13 @@ def get_message_bus() -> MessageBus:
                 if use_redis:
                     try:
                         _default_bus = RedisMessageBus()
+                        logger.info('Using Redis message bus')
                     except Exception as e:
-                        print(f'[WARN] Redis 连接失败，回退到内存模式: {e}')
+                        logger.warning('Redis connection failed, falling back to memory mode: %s', e)
                         _default_bus = InMemoryMessageBus()
                 else:
                     _default_bus = InMemoryMessageBus()
+                    logger.info('Using in-memory message bus')
     return _default_bus
 
 
