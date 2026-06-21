@@ -1,27 +1,10 @@
-# 精确版本锁定 - 由 requirements.in 编译生成
-# 直接依赖: Flask==3.0.0, APScheduler==3.10.4, redis==5.0.1, gunicorn==21.2.0, paho-mqtt, influxdb-client
-# 如需更新依赖: 修改 requirements.in 后执行 pip install -r requirements.in && pip freeze > requirements.txt
-
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+psycopg[binary,pool]==3.2.3
+websockets==13.0.1
 APScheduler==3.10.4
-blinker==1.9.0
-click==8.4.1
-Flask==3.0.0
-gunicorn==21.2.0
-itsdangerous==2.2.0
-Jinja2==3.1.6
-MarkupSafe==3.0.3
-packaging==26.2
+redis==5.0.8
 paho-mqtt==1.6.1
-influxdb-client==1.43.0
-python-dateutil==2.9.0.post0
-pytz==2026.2
-redis==5.0.1
-reactivex==4.0.4
-Rx==3.2.0
-setuptools==75.8.0
-six==1.17.0
-tzdata==2026.2
-tzlocal==5.4.3
-urllib3==2.3.0
-certifi==2024.12.14
-Werkzeug==3.1.8
+jinja2==3.1.6
+python-multipart==0.0.9
+httpx==0.27.2
